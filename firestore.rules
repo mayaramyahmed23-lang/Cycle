@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSystemAdminEmail() {
+      return isAuthenticated() && (
+        request.auth.token.email != null && (
+          request.auth.token.email.lower() == 'contact.cycle.eg@gmail.com' ||
+          request.auth.token.email.lower() == 'mayaramyahmed23@gmail.com'
+        )
+      );
+    }
+
+    function isAdmin() {
+      return isSystemAdminEmail() || (
+        isAuthenticated() && (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+          request.auth.token.email != null && (
+            request.auth.token.email.lower() == 'contact.cycle.eg@gmail.com' ||
+            request.auth.token.email.lower() == 'mayaramyahmed23@gmail.com'
+          )
+        )
+      );
+    }
+
+    // User profiles (Individuals & Admins)
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == userId && (request.resource.data.role != 'admin' || isSystemAdminEmail());
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin()) && (request.resource.data.role != 'admin' || isSystemAdminEmail());
+      allow delete: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Organization profiles
+    match /organizations/{orgId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == orgId && request.resource.data.role == 'organization';
+      allow update: if isAuthenticated() && (request.auth.uid == orgId || isAdmin());
+      allow delete: if isAuthenticated() && (request.auth.uid == orgId || isAdmin());
+    }
+
+    // Plastic reports created by individuals
+    match /reports/{reportId} {
+      allow read: if true;
+      allow create: if isAuthenticated() || (request.resource.data.creatorId != null);
+      allow update: if isAuthenticated() && (
+        resource.data.creatorId == request.auth.uid ||
+        isAdmin() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'interestedOrgIds'])
+      );
+      allow delete: if isAuthenticated() && (resource.data.creatorId == request.auth.uid || isAdmin());
+    }
+
+    // Organization Need Posts ("Post a Need")
+    match /organizationPosts/{postId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.organizationId;
+      allow update: if isAuthenticated() && (
+        resource.data.organizationId == request.auth.uid || 
+        isAdmin() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+      );
+      allow delete: if isAuthenticated() && (resource.data.organizationId == request.auth.uid || isAdmin());
+    }
+
+    // Bidirectional Material Matches
+    match /matches/{matchId} {
+      allow read: if true;
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Smart Collection Routes
+    match /collections/{collectionId} {
+      allow read: if true;
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    match /collectionRoutes/{routeId} {
+      allow read: if true;
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    // Direct Chat Conversations
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      allow update: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
+      allow delete: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
+
+      // Subcollection messages
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // App settings (public read, strictly admin write)
+    match /app_settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Media library (public read, strictly admin write)
+    match /media/{mediaId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

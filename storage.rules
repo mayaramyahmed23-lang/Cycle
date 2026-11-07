@@ -1,0 +1,59 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSystemAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'contact.cycle.eg@gmail.com' ||
+        request.auth.token.email == 'mayaramyahmed23@gmail.com'
+      );
+    }
+
+    // Brand logos (Public read, Authenticated write)
+    match /logos/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Homepage illustrations and banner images (Public read, Authenticated write)
+    match /homepage/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // General media images (Public read, Authenticated write)
+    match /images/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Educational and demonstration videos (Public read, Authenticated write)
+    match /videos/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Plastic recycling report photos (Public read, Authenticated write)
+    match /reports/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // User and organization profile avatars (Public read, Owner or Admin write)
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn() && (request.auth.uid == userId || isSystemAdmin());
+    }
+
+    // Catch-all for all other paths
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+  }
+}

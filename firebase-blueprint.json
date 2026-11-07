@@ -1,0 +1,215 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profiles for individuals and admins",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["individual", "admin"] },
+        "phone": { "type": "string" },
+        "location": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "disabled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "name", "role"]
+    },
+    "organizations": {
+      "title": "Organization",
+      "description": "Registered plastic recycling organizations and collectors",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["organization"] },
+        "orgType": { "type": "string" },
+        "phone": { "type": "string" },
+        "location": { "type": "string" },
+        "description": { "type": "string" },
+        "logoURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "disabled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "name", "role"]
+    },
+    "reports": {
+      "title": "PlasticReport",
+      "description": "Plastic waste drop-off or pickup reports created by individuals",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "creatorPhone": { "type": "string" },
+        "creatorEmail": { "type": "string" },
+        "plasticType": { "type": "string", "enum": ["PET", "HDPE", "PVC", "LDPE", "PP", "PS", "Other"] },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "enum": ["kg", "tons", "pieces"] },
+        "location": { "type": "string" },
+        "description": { "type": "string" },
+        "contactInfo": { "type": "string" },
+        "imageURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["Available", "In discussion", "Collected", "Closed"] },
+        "interestedOrgIds": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["creatorId", "plasticType", "quantity", "unit", "location", "status"]
+    },
+    "conversations": {
+      "title": "Conversation",
+      "description": "Direct chat conversations between individual report creators and organizations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reportId": { "type": "string" },
+        "reportSummary": { "type": "string" },
+        "individualId": { "type": "string" },
+        "individualName": { "type": "string" },
+        "orgId": { "type": "string" },
+        "orgName": { "type": "string" },
+        "participantIds": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string" },
+        "lastSenderId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["reportId", "individualId", "orgId", "participantIds"]
+    },
+    "messages": {
+      "title": "Message",
+      "description": "Individual messages in a conversation",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["conversationId", "senderId", "text"]
+    },
+    "app_settings": {
+      "title": "AppSettings",
+      "description": "Dynamic homepage configuration, brand colors, and content",
+      "type": "object",
+      "properties": {
+        "appName": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "secondaryColor": { "type": "string" },
+        "heroTitleEn": { "type": "string" },
+        "heroTitleAr": { "type": "string" },
+        "heroSubtitleEn": { "type": "string" },
+        "heroSubtitleAr": { "type": "string" },
+        "problemTextEn": { "type": "string" },
+        "problemTextAr": { "type": "string" },
+        "howItWorksEn": { "type": "string" },
+        "howItWorksAr": { "type": "string" },
+        "sectionsVisibility": { "type": "object" },
+        "demoVideos": { "type": "array" }
+      }
+    },
+    "media": {
+      "title": "MediaItem",
+      "description": "Educational and demo media items managed by admin",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["image", "video"] },
+        "category": { "type": "string" },
+        "url": { "type": "string" },
+        "description": { "type": "string" },
+        "featured": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "organizationPosts": {
+      "title": "OrganizationNeedPost",
+      "description": "Material requirement posts created by organizations seeking specific plastics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "organizationName": { "type": "string" },
+        "organizationLocation": { "type": "string" },
+        "organizationPhone": { "type": "string" },
+        "organizationLogoURL": { "type": "string" },
+        "plasticType": { "type": "string", "enum": ["PET", "HDPE", "PVC", "LDPE", "PP", "PS", "Other"] },
+        "requiredQuantity": { "type": "number" },
+        "unit": { "type": "string", "enum": ["kg", "tons", "pieces"] },
+        "location": { "type": "string" },
+        "description": { "type": "string" },
+        "imageURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Fulfilled", "Closed"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["organizationId", "plasticType", "requiredQuantity", "unit", "location", "status"]
+    },
+    "matches": {
+      "title": "MaterialMatch",
+      "description": "Compatibility link between an organization need post and an individual plastic report",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reportId": { "type": "string" },
+        "organizationPostId": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "reportCreatorId": { "type": "string" },
+        "matchScore": { "type": "number" },
+        "breakdown": { "type": "object" },
+        "status": { "type": "string", "enum": ["Suggested", "Contacted", "Accepted", "Declined"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["reportId", "organizationPostId", "matchScore"]
+    },
+    "collections": {
+      "title": "CollectionRoute",
+      "description": "Smart collection routes and pickup tasks for recycling organizations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "organizationName": { "type": "string" },
+        "startLocation": { "type": "string" },
+        "destinationLocation": { "type": "string" },
+        "items": { "type": "array" },
+        "totalEstimatedDistanceKm": { "type": "number" },
+        "totalEstimatedTimeMin": { "type": "number" },
+        "totalQuantityKg": { "type": "number" },
+        "status": { "type": "string", "enum": ["Planned", "In Progress", "Completed"] },
+        "createdAt": { "type": "string" },
+        "completedAt": { "type": "string" }
+      },
+      "required": ["organizationId", "items", "status"]
+    },
+    "collectionRoutes": {
+      "title": "CollectionRouteDoc",
+      "description": "Smart collection routes and pickup stops generated for organizations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "organizationName": { "type": "string" },
+        "title": { "type": "string" },
+        "assignedDriver": { "type": "string" },
+        "totalStops": { "type": "number" },
+        "totalDistanceKm": { "type": "number" },
+        "totalEstimatedDurationMin": { "type": "number" },
+        "totalQuantityKg": { "type": "number" },
+        "stops": { "type": "array" },
+        "status": { "type": "string", "enum": ["Scheduled", "In Progress", "Completed"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["organizationId", "stops", "status"]
+    }
+  }
+}
