@@ -43,8 +43,7 @@ export const getSupabaseConfig = () => {
   const url = normalizeSupabaseUrl(rawUrl);
   const key = (getEnvVar('VITE_SUPABASE_PUBLISHABLE_KEY') || getEnvVar('VITE_SUPABASE_ANON_KEY') || '').trim();
   const adminEmail = (getEnvVar('VITE_SUPABASE_ADMIN_EMAIL') || 'contact.cycle.eg@gmail.com').trim();
-  const adminPassword = (getEnvVar('VITE_SUPABASE_ADMIN_PASSWORD') || '').trim();
-  return { url, key, adminEmail, adminPassword };
+  return { url, key, adminEmail };
 };
 
 export const BUCKET_NAME = 'cycle-media';
@@ -159,15 +158,16 @@ export async function getSupabaseAdminAuthSession(): Promise<SupabaseAdminAuthSt
 }
 
 /**
- * Sign in the Admin to Supabase Auth to obtain a signed JWT for Storage RLS
+ * Sign in the Admin to Supabase Auth to obtain a signed JWT for Storage RLS.
+ * Requires user-provided credentials without frontend hardcoding.
  */
-export async function signInSupabaseAdmin(password?: string, emailOverride?: string): Promise<{ success: boolean; error?: string }> {
+export async function signInSupabaseAdmin(password: string, emailOverride?: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { adminEmail: defaultEmail, adminPassword: envPassword } = getSupabaseConfig();
+    const { adminEmail: defaultEmail } = getSupabaseConfig();
     const supabase = getSupabaseClient();
     
     const targetEmail = (emailOverride || defaultEmail || 'contact.cycle.eg@gmail.com').trim();
-    const targetPassword = (password || envPassword || '').trim();
+    const targetPassword = (password || '').trim();
 
     if (!targetPassword) {
       return {
@@ -202,21 +202,7 @@ export async function signInSupabaseAdmin(password?: string, emailOverride?: str
  * Ensures the Supabase client holds an active, authenticated Admin JWT before Storage mutations
  */
 export async function ensureSupabaseAdminAuth(): Promise<SupabaseAdminAuthState> {
-  const current = await getSupabaseAdminAuthSession();
-  if (current.isAuthenticated) {
-    return current;
-  }
-
-  // Attempt auto-login if env password is configured
-  const { adminPassword } = getSupabaseConfig();
-  if (adminPassword) {
-    const loginRes = await signInSupabaseAdmin(adminPassword);
-    if (loginRes.success) {
-      return await getSupabaseAdminAuthSession();
-    }
-  }
-
-  return current;
+  return await getSupabaseAdminAuthSession();
 }
 
 export interface UploadResult {
@@ -274,11 +260,7 @@ ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (
   bucket_id = 'cycle-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 );
 
 -- 4. AUTHENTICATED ADMIN ONLY UPDATE: Only logged-in Supabase Admin can update
@@ -290,19 +272,11 @@ ON storage.objects FOR UPDATE
 TO authenticated
 USING (
   bucket_id = 'cycle-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 )
 WITH CHECK (
   bucket_id = 'cycle-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 );
 
 -- 5. AUTHENTICATED ADMIN ONLY DELETE: Only logged-in Supabase Admin can delete
@@ -314,11 +288,7 @@ ON storage.objects FOR DELETE
 TO authenticated
 USING (
   bucket_id = 'cycle-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 );`;
 
 /**
@@ -351,11 +321,7 @@ ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (
   bucket_id = 'cycle-user-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 );
 
 -- 4. AUTHENTICATED SERVER UPDATE
@@ -366,11 +332,7 @@ ON storage.objects FOR UPDATE
 TO authenticated
 USING (
   bucket_id = 'cycle-user-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 )
 WITH CHECK (
   bucket_id = 'cycle-user-media'
@@ -384,11 +346,7 @@ ON storage.objects FOR DELETE
 TO authenticated
 USING (
   bucket_id = 'cycle-user-media'
-  AND (
-    (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com', 'admin@cycle.app'))
-    OR
-    ((auth.jwt() ->> 'email') ILIKE '%admin%')
-  )
+  AND (auth.jwt() ->> 'email' IN ('contact.cycle.eg@gmail.com', 'mayaramyahmed23@gmail.com'))
 );`;
 
 

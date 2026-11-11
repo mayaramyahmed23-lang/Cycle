@@ -40,6 +40,7 @@ import { AuthPage } from './pages/AuthPage';
 import { OrganizationNeedsPage } from './pages/OrganizationNeedsPage';
 import { CollectionRoutesPage } from './pages/CollectionRoutesPage';
 import { ImpactDashboardPage } from './pages/ImpactDashboardPage';
+import { EarthIntelligencePage } from './pages/EarthIntelligencePage';
 
 const AppContent: React.FC = () => {
   const { currentUser, userProfile, userRole, isIndividual, isOrganization, isAdmin } = useAuth();
@@ -420,6 +421,14 @@ const AppContent: React.FC = () => {
             organizationPosts={organizationPosts}
             onNavigateToNeeds={() => setCurrentTab('org-needs')}
             onNavigateToReports={() => setCurrentTab('feed')}
+          />
+        )}
+
+        {currentTab === 'earth-intelligence' && (
+          <EarthIntelligencePage
+            reports={allReports}
+            onNavigateToReports={() => setCurrentTab('feed')}
+            onNavigateToRoutes={() => setCurrentTab('smart-routes')}
           />
         )}
 

@@ -186,6 +186,16 @@ export const HomePage: React.FC<HomePageProps> = ({
                         <Package className="w-5 h-5 text-emerald-400" />
                         <span>{t('findPlasticBtn')}</span>
                       </button>
+
+                      <button
+                        id="hero-btn-earth-intelligence"
+                        onClick={() => onNavigate('earth-intelligence')}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border border-cyan-500/50 font-semibold text-sm transition-colors shadow-xs"
+                      >
+                        <Globe2 className="w-5 h-5 text-cyan-400" />
+                        <span>{t('earthIntelligence')}</span>
+                        <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-cyan-400/20 text-cyan-300">NASA</span>
+                      </button>
                     </>
                   )}
 

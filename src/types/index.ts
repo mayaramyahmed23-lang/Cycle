@@ -278,3 +278,118 @@ export interface AppSettings {
     createdAt?: any;
   }[];
 }
+
+// -------------------------------------------------------------
+// NASA EARTH INTELLIGENCE & SATELLITE OBSERVATION TYPES
+// -------------------------------------------------------------
+
+export interface NASAStudyArea {
+  id: string;
+  nameEn: string;
+  nameAr: string;
+  governorateEn: string;
+  governorateAr: string;
+  center: [number, number]; // [lat, lng]
+  bounds: [[number, number], [number, number]];
+  wrsPathRow: string; // e.g. 176/039
+  modisTile: string; // e.g. h20v05
+  descriptionEn: string;
+  descriptionAr: string;
+  environmentalProfileEn: string;
+  environmentalProfileAr: string;
+  cycleReportIds: string[];
+  associatedOrgIds: string[];
+}
+
+export interface LandsatSurfaceBands {
+  sr_b2_blue: number; // Band 2 (0.452 - 0.512 µm)
+  sr_b3_green: number; // Band 3 (0.533 - 0.590 µm)
+  sr_b4_red: number; // Band 4 (0.636 - 0.673 µm)
+  sr_b5_nir: number; // Band 5 (0.851 - 0.879 µm)
+  sr_b6_swir1: number; // Band 6 (1.566 - 1.651 µm)
+  sr_b7_swir2: number; // Band 7 (2.107 - 2.294 µm)
+  st_b10_thermal: number; // Band 10 Surface Temperature (Kelvin)
+}
+
+export interface LandsatObservation {
+  id: string;
+  studyAreaId: string;
+  sensor: 'Landsat 8 OLI/TIRS' | 'Landsat 9 OLI-2/TIRS-2';
+  product: 'LANDSAT/LC08/C02/T1_L2' | 'LANDSAT/LC09/C02/T1_L2';
+  acquisitionDate: string;
+  wrsPathRow: string;
+  cloudCoverPercent: number;
+  sunElevation: number;
+  surfaceReflectance: LandsatSurfaceBands;
+  ndvi: number; // (NIR - Red) / (NIR + Red)
+  ndbi: number; // (SWIR1 - NIR) / (SWIR1 + NIR)
+  ndwi: number; // (Green - NIR) / (Green + NIR)
+  qaPixelValid: boolean;
+  qualitySummaryEn: string;
+  qualitySummaryAr: string;
+}
+
+export interface ModisVegetationRecord {
+  date: string;
+  dayOfYear: number;
+  ndvi: number; // Normalized Difference Vegetation Index (scale 0.0001)
+  evi: number; // Enhanced Vegetation Index (scale 0.0001)
+  summaryQA: number; // 0 = Good, 1 = Marginal, 2 = Snow/Ice, 3 = Cloudy
+  qualityLabel: 'Good' | 'Marginal' | 'Cloudy';
+}
+
+export interface EnvironmentalHotspot {
+  id: string;
+  nameEn: string;
+  nameAr: string;
+  studyAreaId: string;
+  coordinates: [number, number]; // [lat, lng]
+  wasteVolumeKg: number;
+  reportsCount: number;
+  dominantPlastics: PlasticType[];
+  landsatNDBI: number; // Built-up surface index
+  landsatNDVI: number; // Current vegetation index
+  vegetationChange5Yr: number; // % change 2020-2024
+  nearestOrgDistanceKm: number;
+  nearestOrgName: string;
+  collectionPriorityScore: number; // 0 to 100
+  priorityLevel: 'Critical' | 'High' | 'Medium' | 'Low';
+  scoreBreakdown: {
+    wasteVolumeComponent: number; // 35% weight
+    urbanPressureComponent: number; // 25% weight
+    logisticalGapComponent: number; // 25% weight
+    ecologicalVulnerabilityComponent: number; // 15% weight
+  };
+  scientificRationaleEn: string;
+  scientificRationaleAr: string;
+}
+
+export interface EarthIntelligencePayload {
+  studyAreas: NASAStudyArea[];
+  hotspots: EnvironmentalHotspot[];
+  historicalBenchmarks: Record<
+    string,
+    {
+      baseline2020: LandsatObservation;
+      current2024: LandsatObservation;
+      deltaNDVI: number;
+      deltaNDBI: number;
+      urbanExpansionPercent: number;
+    }
+  >;
+  modisTimeSeries: Record<string, ModisVegetationRecord[]>;
+  summary: {
+    totalWasteMonitoredKg: number;
+    activeHotspotsCount: number;
+    highPriorityHotspotsCount: number;
+    totalSatelliteAreaSqKm: number;
+    lastSatellitePass: string;
+  };
+  attribution: {
+    landsatSource: string;
+    modisSource: string;
+    gibsTileUrl: string;
+    disclaimerEn: string;
+    disclaimerAr: string;
+  };
+}

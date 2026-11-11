@@ -33,8 +33,9 @@ service cloud.firestore {
     }
 
     // User profiles (Individuals & Admins)
+    // Only the profile owner or verified administrator can read user profile PII (phone, location, email)
     match /users/{userId} {
-      allow read: if true;
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow create: if isAuthenticated() && request.auth.uid == userId && (request.resource.data.role != 'admin' || isSystemAdminEmail());
       allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin()) && (request.resource.data.role != 'admin' || isSystemAdminEmail());
       allow delete: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
@@ -97,10 +98,15 @@ service cloud.firestore {
       allow update: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
       allow delete: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
 
-      // Subcollection messages
+      // Subcollection messages - strictly accessible ONLY to conversation participants and admin
       match /messages/{messageId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
+        allow read: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants ||
+          isAdmin()
+        );
+        allow create: if isAuthenticated() && 
+          request.resource.data.senderId == request.auth.uid &&
+          (request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants || isAdmin());
         allow update, delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || isAdmin());
       }
     }

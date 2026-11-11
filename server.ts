@@ -1,5 +1,7 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -7,6 +9,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import firebaseConfigJson from './firebase-applet-config.json' with { type: 'json' };
+import { getEarthIntelligenceData } from './server/earthIntelligenceService';
 
 const app = express();
 const PORT = 3000;
@@ -45,17 +48,14 @@ function getCleanSupabaseUrl(): string {
 
 // Server-side cached Supabase Client
 let serverSupabaseClient: SupabaseClient | null = null;
-let lastSupabaseAuthTime = 0;
 let hasCheckedUserMediaBucket = false;
 
 async function getAuthenticatedServerSupabase(): Promise<SupabaseClient> {
   const url = getCleanSupabaseUrl();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const anonKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
-  const email = process.env.VITE_SUPABASE_ADMIN_EMAIL || 'contact.cycle.eg@gmail.com';
-  const password = process.env.VITE_SUPABASE_ADMIN_PASSWORD || '';
 
-  // 1. If service role key is configured, prefer it for administrative server operations
+  // 1. If service role key is configured, use it for administrative operations
   if (serviceRoleKey) {
     if (!serverSupabaseClient) {
       serverSupabaseClient = createClient(url, serviceRoleKey, {
@@ -68,7 +68,7 @@ async function getAuthenticatedServerSupabase(): Promise<SupabaseClient> {
     return serverSupabaseClient;
   }
 
-  // 2. Otherwise authenticate using the designated Admin Supabase Account
+  // 2. Otherwise use the standard client with the publishable/anon key
   if (!serverSupabaseClient) {
     serverSupabaseClient = createClient(url, anonKey, {
       auth: {
@@ -76,24 +76,6 @@ async function getAuthenticatedServerSupabase(): Promise<SupabaseClient> {
         autoRefreshToken: false,
       },
     });
-  }
-
-  // Re-authenticate every 30 minutes if needed
-  const now = Date.now();
-  if (now - lastSupabaseAuthTime > 30 * 60 * 1000) {
-    try {
-      const { error } = await serverSupabaseClient.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        console.warn('[Server Supabase Auth] signInWithPassword warning:', error.message);
-      } else {
-        lastSupabaseAuthTime = now;
-      }
-    } catch (err) {
-      console.warn('[Server Supabase Auth] Failed to sign in with password:', err);
-    }
   }
 
   return serverSupabaseClient;
@@ -118,11 +100,37 @@ async function ensureUserMediaBucket(client: SupabaseClient) {
   }
 }
 
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.GEMINI_API_KEY ||
-  firebaseConfigJson.apiKey ||
-  'cycle_secure_token_secret_salt';
+// Secure SESSION_SECRET: Load from environment variable, server secret file, or generate 256-bit random key
+// NEVER expose in logs, frontend bundles, or fall back to public values
+let _runtimeSessionSecret = '';
+function getSessionSecret(): string {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 16) {
+    return process.env.SESSION_SECRET.trim();
+  }
+  if (_runtimeSessionSecret) {
+    return _runtimeSessionSecret;
+  }
+  const secretPath = path.join(process.cwd(), '.session-secret');
+  try {
+    if (fs.existsSync(secretPath)) {
+      const stored = fs.readFileSync(secretPath, 'utf8').trim();
+      if (stored.length >= 16) {
+        _runtimeSessionSecret = stored;
+        return _runtimeSessionSecret;
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  _runtimeSessionSecret = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(secretPath, _runtimeSessionSecret, { mode: 0o600 });
+  } catch {
+    // Non-blocking
+  }
+  return _runtimeSessionSecret;
+}
 
 /**
  * Generate HMAC signed token for authenticated application sessions
@@ -130,7 +138,7 @@ const SESSION_SECRET =
 function generateSessionToken(uid: string, email: string): string {
   const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
   const payload = `${uid}:${email}:${expiresAt}`;
-  const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  const hmac = crypto.createHmac('sha256', getSessionSecret()).update(payload).digest('hex');
   return `cycle_session_${Buffer.from(payload).toString('base64url')}.${hmac}`;
 }
 
@@ -148,7 +156,7 @@ function verifySessionToken(token: string): { uid: string; email: string } | nul
     if (!uid || !email || !expiresAtStr) return null;
     const expiresAt = parseInt(expiresAtStr, 10);
     if (isNaN(expiresAt) || Date.now() > expiresAt) return null;
-    const expectedHmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const expectedHmac = crypto.createHmac('sha256', getSessionSecret()).update(payload).digest('hex');
     if (hmac.length !== expectedHmac.length) return null;
     if (!crypto.timingSafeEqual(Buffer.from(hmac, 'hex'), Buffer.from(expectedHmac, 'hex'))) return null;
     return { uid, email };
@@ -379,6 +387,17 @@ Return strictly valid JSON matching this schema:
         isFallback: true,
       },
     });
+  }
+});
+
+// NASA Earth Observation Data & Environmental Intelligence Endpoint
+app.get('/api/earth-intelligence/data', (_req, res) => {
+  try {
+    const data = getEarthIntelligenceData();
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error('[Earth Intelligence Data Error]', err);
+    res.status(500).json({ error: 'Failed to retrieve Earth Observation data', details: err?.message });
   }
 });
 

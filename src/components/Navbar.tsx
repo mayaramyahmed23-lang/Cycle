@@ -170,6 +170,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             <button
+              id="nav-link-earth-intelligence"
+              onClick={() => handleNavClick('earth-intelligence')}
+              className={`px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition-all ${
+                currentTab === 'earth-intelligence'
+                  ? 'bg-cyan-50 border-cyan-500 text-cyan-900 font-semibold shadow-2xs'
+                  : 'border-cyan-200/90 bg-cyan-50/60 text-cyan-800 hover:bg-cyan-100/70 font-medium'
+              }`}
+            >
+              <Globe2 className="w-4 h-4 text-cyan-700" />
+              <span>{t('earthIntelligence')}</span>
+              <span className="text-[9px] uppercase font-extrabold tracking-wider px-1.5 py-0.5 rounded-full bg-cyan-200 text-cyan-950">NASA</span>
+            </button>
+
+            <button
               id="nav-link-connect"
               onClick={() => handleNavClick('contact')}
               className={`px-3.5 py-2 rounded-lg transition-colors ${
@@ -458,6 +472,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             {t('impactMetrics')}
+          </button>
+
+          <button
+            id="mobile-link-earth-intelligence"
+            onClick={() => handleNavClick('earth-intelligence')}
+            className={`w-full text-left rtl:text-right px-3 py-2.5 rounded-lg text-sm font-medium flex items-center justify-between border border-cyan-200 ${
+              currentTab === 'earth-intelligence' ? 'bg-cyan-50 text-cyan-900 font-semibold' : 'text-cyan-800 bg-cyan-50/50 hover:bg-cyan-100/60'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Globe2 className="w-4 h-4 text-cyan-700" />
+              <span>{t('earthIntelligence')}</span>
+            </div>
+            <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded-full bg-cyan-200 text-cyan-900">NASA</span>
           </button>
 
           <button
