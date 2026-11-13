@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -7,12 +8,23 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, updateDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
 import firebaseConfigJson from './firebase-applet-config.json' with { type: 'json' };
-import { getEarthIntelligenceData } from './server/earthIntelligenceService';
+import {
+  getEarthIntelligenceOverview,
+  analyzeLocation,
+  getActionInsightsForRegions,
+} from './server/earthIntelligenceService';
+import {
+  getAppeearsOverviewStatus,
+  submitAppeearsTask,
+  pollAndProcessAppeearsTask,
+  inspectUploadedRasterFile,
+} from './server/nasa/appeearsClient';
+import { NASA_GIBS_LAYERS, buildGibsTileUrl } from './server/nasa/nasaCatalog';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Safe, lazy initialization of Firebase App & Firestore
 let firestoreDb: ReturnType<typeof getFirestore> | null = null;
@@ -390,14 +402,221 @@ Return strictly valid JSON matching this schema:
   }
 });
 
-// NASA Earth Observation Data & Environmental Intelligence Endpoint
-app.get('/api/earth-intelligence/data', (_req, res) => {
+// Helper: Load live Cycle reports & organizations from Firestore safely
+async function fetchLiveCycleGroundRecords(): Promise<{
+  reports: any[];
+  organizations: Array<{ id: string; name: string; orgType?: string; location?: string }>;
+}> {
+  const database = getDb();
+  if (!database) return { reports: [], organizations: [] };
   try {
-    const data = getEarthIntelligenceData();
+    const [repSnap, orgSnap] = await Promise.all([
+      getDocs(collection(database, 'reports')),
+      getDocs(collection(database, 'organizations')),
+    ]);
+    const reports: any[] = [];
+    repSnap.forEach((d) => reports.push({ id: d.id, ...(d.data() as any) }));
+    const organizations: Array<{ id: string; name: string; orgType?: string; location?: string }> = [];
+    orgSnap.forEach((d) => {
+      const data = d.data() as any;
+      if (data?.status !== 'disabled') {
+        organizations.push({
+          id: d.id,
+          name: data?.name || 'Organization',
+          orgType: data?.orgType || 'Recycler',
+          location: data?.location || '',
+        });
+      }
+    });
+    return { reports, organizations };
+  } catch (err) {
+    console.warn('[Earth Intelligence Firestore Ground Fetch Warning]', err);
+    return { reports: [], organizations: [] };
+  }
+}
+
+// NASA Earth Intelligence Engine Endpoints (Real NASA MODIS V061 + GIBS + AppEEARS)
+app.get('/api/earth-intelligence/overview', async (req, res) => {
+  try {
+    const regionId = typeof req.query.regionId === 'string' ? req.query.regionId : 'cairo-urban-core';
+    const qaFilter = req.query.qaFilter === 'strict_good' ? 'strict_good' : 'good_and_marginal';
+    const data = await getEarthIntelligenceOverview(regionId, qaFilter);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error('[Earth Intelligence Overview Error]', err);
+    res.status(500).json({ error: 'Failed to retrieve NASA Earth Intelligence overview', details: err?.message });
+  }
+});
+
+// Clean alias for backwards path compatibility
+app.get('/api/earth-intelligence/data', async (req, res) => {
+  try {
+    const regionId = typeof req.query.regionId === 'string' ? req.query.regionId : 'cairo-urban-core';
+    const qaFilter = req.query.qaFilter === 'strict_good' ? 'strict_good' : 'good_and_marginal';
+    const data = await getEarthIntelligenceOverview(regionId, qaFilter);
     res.json({ success: true, data });
   } catch (err: any) {
     console.error('[Earth Intelligence Data Error]', err);
-    res.status(500).json({ error: 'Failed to retrieve Earth Observation data', details: err?.message });
+    res.status(500).json({ error: 'Failed to retrieve NASA Earth Observation data', details: err?.message });
+  }
+});
+
+// On-demand Global or Case-Study NASA MODIS V061 Quantitative Analysis
+app.get('/api/earth-intelligence/analyze', async (req, res) => {
+  try {
+    const regionId = typeof req.query.regionId === 'string' ? req.query.regionId : undefined;
+    const latRaw = req.query.lat !== undefined ? Number(req.query.lat) : undefined;
+    const lngRaw = req.query.lng !== undefined ? Number(req.query.lng) : undefined;
+    const customName = typeof req.query.name === 'string' ? req.query.name : undefined;
+    const startYearRaw = req.query.startYear !== undefined ? parseInt(String(req.query.startYear), 10) : undefined;
+    const endYearRaw = req.query.endYear !== undefined ? parseInt(String(req.query.endYear), 10) : undefined;
+    const qaFilterMode = req.query.qaFilter === 'strict_good' ? 'strict_good' : 'good_and_marginal';
+
+    if (!regionId && (latRaw === undefined || lngRaw === undefined || !Number.isFinite(latRaw) || !Number.isFinite(lngRaw))) {
+      res.status(400).json({ error: 'Provide either a valid regionId or numeric lat and lng coordinates.' });
+      return;
+    }
+    if (latRaw !== undefined && (latRaw < -85 || latRaw > 85)) {
+      res.status(400).json({ error: 'Latitude must be between -85 and 85 degrees.' });
+      return;
+    }
+    if (lngRaw !== undefined && (lngRaw < -180 || lngRaw > 180)) {
+      res.status(400).json({ error: 'Longitude must be between -180 and 180 degrees.' });
+      return;
+    }
+
+    const analysis = await analyzeLocation({
+      regionId,
+      lat: latRaw,
+      lng: lngRaw,
+      customName,
+      startYear: Number.isFinite(startYearRaw) ? startYearRaw : undefined,
+      endYear: Number.isFinite(endYearRaw) ? endYearRaw : undefined,
+      qaFilterMode,
+    });
+    res.json({ success: true, data: analysis });
+  } catch (err: any) {
+    console.error('[Earth Intelligence Analyze Error]', err);
+    res.status(500).json({ error: 'Failed to execute NASA MODIS location analysis', details: err?.message });
+  }
+});
+
+// NASA GIBS WMTS Layer Definitions & Date-Bound Tile Templates
+app.get('/api/earth-intelligence/gibs-layers', (req, res) => {
+  const requestedDate = typeof req.query.date === 'string' ? req.query.date : '2026-10-16';
+  const layers = NASA_GIBS_LAYERS.map((layer) => ({
+    ...layer,
+    tileUrlTemplate: buildGibsTileUrl(layer, requestedDate),
+  }));
+  res.json({ success: true, data: { date: requestedDate, layers } });
+});
+
+// Environmental Action Insights (Combining NASA Environmental Context + Live Firestore Cycle Reports/Orgs)
+app.get('/api/earth-intelligence/action-insights', async (req, res) => {
+  try {
+    const regionIds =
+      typeof req.query.regionIds === 'string'
+        ? req.query.regionIds.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+    const { reports, organizations } = await fetchLiveCycleGroundRecords();
+    const insights = await getActionInsightsForRegions({
+      reports,
+      organizations,
+      ensureRegionIds: regionIds,
+    });
+    res.json({ success: true, data: insights });
+  } catch (err: any) {
+    console.error('[Earth Intelligence Action Insights GET Error]', err);
+    res.status(500).json({ error: 'Failed to compute environmental action insights', details: err?.message });
+  }
+});
+
+app.post('/api/earth-intelligence/action-insights', async (req, res) => {
+  try {
+    const bodyReports = Array.isArray(req.body?.reports) ? req.body.reports : null;
+    const bodyOrgs = Array.isArray(req.body?.organizations) ? req.body.organizations : null;
+    const ensureRegionIds = Array.isArray(req.body?.ensureRegionIds) ? req.body.ensureRegionIds : undefined;
+
+    let reports = bodyReports;
+    let organizations = bodyOrgs;
+    if (!reports || !organizations) {
+      const live = await fetchLiveCycleGroundRecords();
+      if (!reports) reports = live.reports;
+      if (!organizations) organizations = live.organizations;
+    }
+
+    const insights = await getActionInsightsForRegions({
+      reports: reports || [],
+      organizations: organizations || [],
+      ensureRegionIds,
+    });
+    res.json({ success: true, data: insights });
+  } catch (err: any) {
+    console.error('[Earth Intelligence Action Insights POST Error]', err);
+    res.status(500).json({ error: 'Failed to compute environmental action insights', details: err?.message });
+  }
+});
+
+// NASA AppEEARS Workflow Routes (Server-side Auth Status, Submit, Poll, Raster File Inspection)
+app.get('/api/earth-intelligence/appeears/status', (_req, res) => {
+  try {
+    res.json({ success: true, data: getAppeearsOverviewStatus() });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to check AppEEARS status', details: err?.message });
+  }
+});
+
+app.post('/api/earth-intelligence/appeears/submit', async (req, res) => {
+  try {
+    const { taskName, taskType, products, startDate, endDate, outputFormat, bbox, point } = req.body || {};
+    if (!taskName || !Array.isArray(products) || products.length === 0 || !startDate || !endDate) {
+      res.status(400).json({ error: 'Missing required AppEEARS parameters (taskName, products, startDate, endDate).' });
+      return;
+    }
+    const task = await submitAppeearsTask({
+      taskName: String(taskName),
+      taskType: taskType === 'point' ? 'point' : 'area',
+      products,
+      startDate: String(startDate),
+      endDate: String(endDate),
+      outputFormat: outputFormat === 'netcdf4' ? 'netcdf4' : 'geotiff',
+      bbox,
+      point,
+    });
+    res.json({ success: true, data: task });
+  } catch (err: any) {
+    console.error('[AppEEARS Submit Error]', err);
+    res.status(500).json({ error: err?.message || 'Failed to submit AppEEARS task' });
+  }
+});
+
+app.post('/api/earth-intelligence/appeears/poll/:taskId', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    if (!taskId) {
+      res.status(400).json({ error: 'Missing taskId parameter.' });
+      return;
+    }
+    const task = await pollAndProcessAppeearsTask(taskId);
+    res.json({ success: true, data: task });
+  } catch (err: any) {
+    console.error('[AppEEARS Poll Error]', err);
+    res.status(500).json({ error: err?.message || 'Failed to poll AppEEARS task' });
+  }
+});
+
+app.post('/api/earth-intelligence/appeears/inspect-file', async (req, res) => {
+  try {
+    const { fileBase64, fileName, productHint } = req.body || {};
+    if (!fileBase64 || !fileName) {
+      res.status(400).json({ error: 'Missing fileBase64 or fileName payload.' });
+      return;
+    }
+    const summary = await inspectUploadedRasterFile(String(fileBase64), String(fileName), productHint);
+    res.json({ success: true, data: summary });
+  } catch (err: any) {
+    console.error('[AppEEARS Inspect File Error]', err);
+    res.status(500).json({ error: err?.message || 'Failed to parse GeoTIFF / NetCDF4 raster file' });
   }
 });
 
@@ -934,25 +1153,42 @@ app.post('/api/admin/delete-need-post', async (req, res) => {
 // VITE MIDDLEWARE / STATIC ASSETS
 // -------------------------------------------------------------
 async function startServer() {
-  try {
-    if (process.env.NODE_ENV !== 'production') {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: 'spa',
+  const httpServer = http.createServer(app);
+
+  if (process.env.NODE_ENV !== 'production') {
+    let viteMiddleware: express.RequestHandler | null = null;
+    const viteInitPromise = createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+      },
+      appType: 'spa',
+    })
+      .then((vite) => {
+        viteMiddleware = vite.middlewares;
+      })
+      .catch((initErr) => {
+        console.error('[Server Startup Warning] Vite middleware initialization encountered error:', initErr);
       });
-      app.use(vite.middlewares);
-    } else {
-      const distPath = path.join(process.cwd(), 'dist');
-      app.use(express.static(distPath));
-      app.get('*', (_req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-      });
-    }
-  } catch (initErr) {
-    console.error('[Server Startup Warning] Middleware initialization encountered error:', initErr);
+
+    app.use(async (req, res, next) => {
+      if (!viteMiddleware) {
+        await viteInitPromise;
+      }
+      if (viteMiddleware) {
+        return viteMiddleware(req, res, next);
+      }
+      return next();
+    });
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Cycle Server] Successfully listening on 0.0.0.0:${PORT} (environment PORT=${process.env.PORT || 'default 3000'})`);
   });
 }

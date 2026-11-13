@@ -2,444 +2,621 @@ import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
-  NASAStudyArea,
-  EnvironmentalHotspot,
+  GIBSLayerConfig,
   PlasticReport,
+  StudyRegionDefinition,
 } from '../types';
-import { Layers, Eye, ShieldAlert, Sparkles, MapPin, Building2, Flame } from 'lucide-react';
+import {
+  Layers,
+  Crosshair,
+  Eye,
+  SplitSquareHorizontal,
+  Info,
+  MapPin,
+} from 'lucide-react';
 
 interface EarthIntelligenceMapProps {
-  studyAreas: NASAStudyArea[];
-  hotspots: EnvironmentalHotspot[];
+  regions: StudyRegionDefinition[];
+  activeRegion: StudyRegionDefinition;
+  gibsLayers: GIBSLayerConfig[];
   reports: PlasticReport[];
-  selectedStudyAreaId: string;
-  selectedHotspotId: string | null;
-  onSelectStudyArea: (id: string) => void;
-  onSelectHotspot: (id: string) => void;
+  organizations: Array<{ id: string; name: string; orgType?: string; location?: string }>;
+  onSelectRegion: (regionId: string) => void;
+  onAnalyzeCustomPoint: (lat: number, lng: number) => void;
+  analyzingGlobalPoint: boolean;
+  latestObservationDate?: string | null;
   language: 'en' | 'ar';
 }
 
+const EGYPT_LOCATION_COORDS: Record<string, [number, number]> = {
+  cairo: [30.0444, 31.2357],
+  giza: [30.0131, 31.2089],
+  maadi: [29.9598, 31.2586],
+  'nasr city': [30.0511, 31.3656],
+  'new cairo': [30.0074, 31.4913],
+  'new capital': [30.0131, 31.7483],
+  badr: [30.136, 31.715],
+  '10th of ramadan': [30.306, 31.741],
+  ramadan: [30.306, 31.741],
+  zagazig: [30.5877, 31.502],
+  sharqia: [30.5877, 31.502],
+  mansoura: [31.0364, 31.3807],
+  alexandria: [31.2001, 29.9187],
+  monufia: [30.5972, 30.9876],
+  tanta: [30.7865, 31.0004],
+  ismailia: [30.6043, 32.2723],
+  suez: [29.9668, 32.5498],
+  aswan: [24.0889, 32.8998],
+  luxor: [25.6872, 32.6396],
+  القاهرة: [30.0444, 31.2357],
+  الجيزة: [30.0131, 31.2089],
+  الإسكندرية: [31.2001, 29.9187],
+  الاسكندرية: [31.2001, 29.9187],
+  الزقازيق: [30.5877, 31.502],
+  الشرقية: [30.5877, 31.502],
+  المنوفية: [30.5972, 30.9876],
+  أسوان: [24.0889, 32.8998],
+  العاصمة: [30.0131, 31.7483],
+};
+
+function resolveCityCoords(locStr: string, idx: number): [number, number] | null {
+  const clean = (locStr || '').toLowerCase();
+  for (const [k, coords] of Object.entries(EGYPT_LOCATION_COORDS)) {
+    if (clean.includes(k)) {
+      const jitterLat = ((idx % 5) - 2) * 0.008;
+      const jitterLng = (((idx * 3) % 5) - 2) * 0.008;
+      return [coords[0] + jitterLat, coords[1] + jitterLng];
+    }
+  }
+  return null;
+}
+
+function buildClientGibsUrl(layer: GIBSLayerConfig, dateStr: string): string {
+  const cleanDate = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : layer.defaultDate;
+  const effectiveDate =
+    layer.cadence === 'annual'
+      ? `${Math.min(2024, Math.max(2001, parseInt(cleanDate.slice(0, 4), 10) || 2024))}-01-01`
+      : cleanDate;
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer.layerIdentifier}/default/${effectiveDate}/${layer.tileMatrixSet}/{z}/{y}/{x}.${layer.format}`;
+}
+
 export const EarthIntelligenceMap: React.FC<EarthIntelligenceMapProps> = ({
-  studyAreas,
-  hotspots,
+  regions,
+  activeRegion,
+  gibsLayers,
   reports,
-  selectedStudyAreaId,
-  selectedHotspotId,
-  onSelectStudyArea,
-  onSelectHotspot,
+  organizations,
+  onSelectRegion,
+  onAnalyzeCustomPoint,
+  analyzingGlobalPoint,
+  latestObservationDate,
   language,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
+  const mapElRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const baseStreetLayerRef = useRef<L.TileLayer | null>(null);
+  const primaryGibsRef = useRef<L.TileLayer | null>(null);
+  const compareGibsRef = useRef<L.TileLayer | null>(null);
+  const regionsOverlayRef = useRef<L.LayerGroup>(L.layerGroup());
+  const cycleOverlayRef = useRef<L.LayerGroup>(L.layerGroup());
 
-  // Layer Visibility State
-  const [activeBaseLayer, setActiveBaseLayer] = useState<'satellite' | 'street' | 'nasa-gibs'>('satellite');
-  const [showHotspots, setShowHotspots] = useState(true);
-  const [showReports, setShowReports] = useState(true);
-  const [showStudyAreas, setShowStudyAreas] = useState(true);
-  const [showHeatZones, setShowHeatZones] = useState(true);
+  const todayIso = new Date().toISOString().slice(0, 10);
 
-  // Tile layers refs
-  const baseLayersRef = useRef<{ [key: string]: L.TileLayer }>({});
-  const overlayLayersRef = useRef<{
-    studyAreas: L.LayerGroup;
-    hotspots: L.LayerGroup;
-    reports: L.LayerGroup;
-    heatZones: L.LayerGroup;
-  }>({
-    studyAreas: L.layerGroup(),
-    hotspots: L.layerGroup(),
-    reports: L.layerGroup(),
-    heatZones: L.layerGroup(),
-  });
+  // NASA GIBS controls
+  const [selectedLayerId, setSelectedLayerId] = useState<string>(
+    gibsLayers[0]?.id || 'gibs-truecolor-terra'
+  );
+  const [primaryDate, setPrimaryDate] = useState<string>(
+    latestObservationDate || gibsLayers[0]?.defaultDate || '2026-10-16'
+  );
+  const [userPinnedDate, setUserPinnedDate] = useState<boolean>(false);
+  const [gibsOpacity, setGibsOpacity] = useState<number>(0.88);
+  const [showGibsLayer, setShowGibsLayer] = useState<boolean>(true);
 
-  // Initialize Map
+  // Split Comparison controls
+  const [splitCompareEnabled, setSplitCompareEnabled] = useState<boolean>(false);
+  const [compareLayerId, setCompareLayerId] = useState<string>(
+    gibsLayers[0]?.id || 'gibs-truecolor-terra'
+  );
+  const [compareDate, setCompareDate] = useState<string>('2022-10-16');
+  const [splitPercent, setSplitPercent] = useState<number>(50);
+
+  // Cycle Overlays + Global Click-to-Analyze mode
+  const [showStudyRegions, setShowStudyRegions] = useState<boolean>(true);
+  const [showCycleGroundPins, setShowCycleGroundPins] = useState<boolean>(true);
+  const [clickAnalyzeMode, setClickAnalyzeMode] = useState<boolean>(false);
+
+  const activeLayer =
+    gibsLayers.find((l) => l.id === selectedLayerId) || gibsLayers[0];
+  const compareLayer =
+    gibsLayers.find((l) => l.id === compareLayerId) || gibsLayers[0];
+
+  const effectivePrimaryDate =
+    activeLayer?.cadence === 'annual'
+      ? `${Math.min(2024, Math.max(2001, parseInt(primaryDate.slice(0, 4), 10) || 2024))}-01-01`
+      : primaryDate;
+
+  // Keep primary GIBS imagery date synced with latest retrieved MODIS observation unless user pinned a custom date
   useEffect(() => {
-    if (!mapContainerRef.current || mapInstanceRef.current) return;
+    if (!userPinnedDate && latestObservationDate && /^\d{4}-\d{2}-\d{2}$/.test(latestObservationDate)) {
+      setPrimaryDate(latestObservationDate);
+    }
+  }, [latestObservationDate, userPinnedDate]);
 
-    // Default center on Egypt: Cairo / Nile Delta corridor
-    const map = L.map(mapContainerRef.current, {
-      center: [30.15, 31.4],
+  // Update compare clip geometry inside Leaflet container without recreating tiles
+  const applySplitClip = () => {
+    const map = mapRef.current;
+    const compTile = compareGibsRef.current;
+    if (!map || !compTile) return;
+    const container = compTile.getContainer();
+    if (!container) return;
+    if (!splitCompareEnabled || !showGibsLayer) {
+      container.style.clip = '';
+      return;
+    }
+    const size = map.getSize();
+    const nw = map.containerPointToLayerPoint([0, 0]);
+    const se = map.containerPointToLayerPoint([size.x, size.y]);
+    const clipX = Math.round(nw.x + (size.x * splitPercent) / 100);
+    container.style.clip = `rect(${nw.y}px, ${se.x}px, ${se.y}px, ${clipX}px)`;
+  };
+
+  // Initialize Leaflet Map once
+  useEffect(() => {
+    if (!mapElRef.current || mapRef.current) return;
+    const map = L.map(mapElRef.current, {
+      center: activeRegion.center,
       zoom: 8,
-      minZoom: 6,
-      maxZoom: 17,
-      zoomControl: false,
+      minZoom: 2,
+      maxZoom: 16,
+      zoomControl: true,
     });
 
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18,
+    });
+    osm.addTo(map);
+    baseStreetLayerRef.current = osm;
 
-    // 1. High-Resolution Satellite Basemap (Esri World Imagery)
-    const satelliteLayer = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      {
-        attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics, USDA, USGS',
-        maxZoom: 18,
-      }
-    );
+    regionsOverlayRef.current.addTo(map);
+    cycleOverlayRef.current.addTo(map);
+    mapRef.current = map;
 
-    // 2. OpenStreetMap Standard
-    const streetLayer = L.tileLayer(
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }
-    );
-
-    // 3. NASA GIBS MODIS Terra TrueColor
-    // Uses standardized date fallback for clean satellite pass
-    const nasaGibsLayer = L.tileLayer(
-      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/2024-08-01/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',
-      {
-        attribution: 'Imagery &copy; NASA EOSDIS GIBS / Worldview',
-        maxZoom: 9,
-      }
-    );
-
-    baseLayersRef.current = {
-      satellite: satelliteLayer,
-      street: streetLayer,
-      'nasa-gibs': nasaGibsLayer,
-    };
-
-    // Attach default base
-    satelliteLayer.addTo(map);
-
-    // Attach overlay layer groups
-    overlayLayersRef.current.studyAreas.addTo(map);
-    overlayLayersRef.current.hotspots.addTo(map);
-    overlayLayersRef.current.reports.addTo(map);
-    overlayLayersRef.current.heatZones.addTo(map);
-
-    mapInstanceRef.current = map;
+    map.on('move zoom moveend zoomend', () => {
+      applySplitClip();
+    });
 
     return () => {
       map.remove();
-      mapInstanceRef.current = null;
+      mapRef.current = null;
     };
   }, []);
 
-  // Update Base Layer
+  // Fly to active region when selection changes
   useEffect(() => {
-    const map = mapInstanceRef.current;
+    const map = mapRef.current;
     if (!map) return;
+    const targetZoom = activeRegion.isCustom ? 9 : 8;
+    map.setView(activeRegion.center, Math.min(targetZoom, activeLayer?.maxZoom || 9));
+  }, [activeRegion.id, activeRegion.center[0], activeRegion.center[1]]);
 
-    Object.values(baseLayersRef.current).forEach((layer) => {
-      if (map.hasLayer(layer)) map.removeLayer(layer);
+  // Click-to-analyze anywhere on Earth handler
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const handler = (e: L.LeafletMouseEvent) => {
+      if (!clickAnalyzeMode) return;
+      onAnalyzeCustomPoint(
+        Number(e.latlng.lat.toFixed(4)),
+        Number(e.latlng.lng.toFixed(4))
+      );
+      setClickAnalyzeMode(false);
+    };
+    map.on('click', handler);
+    return () => {
+      map.off('click', handler);
+    };
+  }, [clickAnalyzeMode, onAnalyzeCustomPoint]);
+
+  // Synchronize NASA GIBS Primary & Split Comparison Tile Layers
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !activeLayer) return;
+
+    if (primaryGibsRef.current) {
+      map.removeLayer(primaryGibsRef.current);
+      primaryGibsRef.current = null;
+    }
+    if (compareGibsRef.current) {
+      map.removeLayer(compareGibsRef.current);
+      compareGibsRef.current = null;
+    }
+
+    if (!showGibsLayer) return;
+
+    const primaryUrl = buildClientGibsUrl(activeLayer, primaryDate);
+    const primaryTile = L.tileLayer(primaryUrl, {
+      attribution: 'NASA EOSDIS GIBS',
+      maxNativeZoom: activeLayer.maxZoom,
+      maxZoom: 14,
+      opacity: gibsOpacity,
     });
+    primaryTile.addTo(map);
+    primaryGibsRef.current = primaryTile;
 
-    const targetLayer = baseLayersRef.current[activeBaseLayer];
-    if (targetLayer) {
-      targetLayer.addTo(map);
-    }
-  }, [activeBaseLayer]);
-
-  // Render Overlays: Study Areas, Hotspots, Reports, Heat Zones
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    // 1. Clear previous overlays
-    overlayLayersRef.current.studyAreas.clearLayers();
-    overlayLayersRef.current.hotspots.clearLayers();
-    overlayLayersRef.current.reports.clearLayers();
-    overlayLayersRef.current.heatZones.clearLayers();
-
-    // 2. Draw Study Areas
-    if (showStudyAreas) {
-      studyAreas.forEach((area) => {
-        const isSelected = area.id === selectedStudyAreaId;
-        const rect = L.rectangle(area.bounds, {
-          color: isSelected ? '#06b6d4' : '#38bdf8',
-          weight: isSelected ? 3 : 1.5,
-          dashArray: isSelected ? undefined : '4, 4',
-          fillColor: isSelected ? '#06b6d4' : '#0284c7',
-          fillOpacity: isSelected ? 0.22 : 0.08,
-        });
-
-        rect.on('click', () => {
-          onSelectStudyArea(area.id);
-        });
-
-        rect.bindTooltip(
-          `<strong>${language === 'ar' ? area.nameAr : area.nameEn}</strong><br/><span style="font-size:11px;color:#0e7490">WRS: ${area.wrsPathRow} | MODIS: ${area.modisTile}</span>`,
-          { sticky: true }
-        );
-
-        rect.addTo(overlayLayersRef.current.studyAreas);
+    if (splitCompareEnabled && compareLayer) {
+      const compUrl = buildClientGibsUrl(compareLayer, compareDate);
+      const compTile = L.tileLayer(compUrl, {
+        attribution: 'NASA EOSDIS GIBS (Comparison)',
+        maxNativeZoom: compareLayer.maxZoom,
+        maxZoom: 14,
+        opacity: gibsOpacity,
+        zIndex: 350,
       });
-    }
-
-    // 3. Draw Heat Zones / Urban Pressure Buffers
-    if (showHeatZones) {
-      hotspots.forEach((h) => {
-        const radius = Math.max(1200, Math.min(4500, h.wasteVolumeKg * 0.4));
-        const color = h.priorityLevel === 'Critical' ? '#ef4444' : h.priorityLevel === 'High' ? '#f97316' : '#eab308';
-        const circle = L.circle(h.coordinates, {
-          radius: radius,
-          color: color,
-          weight: 1,
-          opacity: 0.6,
-          fillColor: color,
-          fillOpacity: 0.18,
-        });
-        circle.addTo(overlayLayersRef.current.heatZones);
-      });
-    }
-
-    // 4. Draw Hotspots with Pulsing Badges
-    if (showHotspots) {
-      hotspots.forEach((h) => {
-        const isSelected = h.id === selectedHotspotId;
-        const colorClass =
-          h.priorityLevel === 'Critical'
-            ? 'bg-rose-600 text-white border-rose-300'
-            : h.priorityLevel === 'High'
-            ? 'bg-amber-600 text-white border-amber-300'
-            : 'bg-yellow-500 text-stone-900 border-yellow-200';
-
-        const customIcon = L.divIcon({
-          className: 'custom-hotspot-pin',
-          html: `
-            <div class="relative flex items-center justify-center cursor-pointer ${isSelected ? 'scale-125 z-50' : 'hover:scale-110'} transition-transform">
-              <span class="absolute -inset-1 rounded-full ${h.priorityLevel === 'Critical' ? 'bg-rose-500/40 animate-ping' : ''}"></span>
-              <div class="relative flex items-center gap-1 px-2 py-1 rounded-full border-2 ${colorClass} shadow-lg text-[11px] font-bold">
-                <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-                <span>${h.collectionPriorityScore.toFixed(0)}</span>
-              </div>
-            </div>
-          `,
-          iconSize: [40, 24],
-          iconAnchor: [20, 12],
-        });
-
-        const marker = L.marker(h.coordinates, { icon: customIcon });
-
-        marker.on('click', () => {
-          onSelectHotspot(h.id);
-          onSelectStudyArea(h.studyAreaId);
-        });
-
-        const popupContent = `
-          <div style="font-family: inherit; font-size: 13px; min-width: 200px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-              <strong style="color:#0f172a; font-size: 14px;">${language === 'ar' ? h.nameAr : h.nameEn}</strong>
-              <span style="font-weight:700; font-size: 11px; padding: 2px 6px; border-radius: 9999px; background:${h.priorityLevel === 'Critical' ? '#fee2e2; color:#b91c1c' : '#fef3c7; color:#b45309'}">
-                ${h.priorityLevel}
-              </span>
-            </div>
-            <div style="color:#475569; margin-bottom: 4px;">
-              <strong>${language === 'ar' ? 'الكمية المقدرة:' : 'Waste Volume:'}</strong> ${(h.wasteVolumeKg).toLocaleString()} kg
-            </div>
-            <div style="color:#475569; margin-bottom: 4px;">
-              <strong>${language === 'ar' ? 'مؤشر أولوية الجمع:' : 'Priority Score:'}</strong> ${h.collectionPriorityScore.toFixed(1)} / 100
-            </div>
-            <div style="color:#475569; margin-bottom: 6px;">
-              <strong>${language === 'ar' ? 'مؤشر الكتلة NDBI:' : 'Landsat NDBI:'}</strong> ${h.landsatNDBI > 0 ? '+' : ''}${h.landsatNDBI}
-            </div>
-            <div style="font-size: 11px; color:#0284c7; font-weight:600; cursor:pointer;">
-              ${language === 'ar' ? 'انقر لعرض التحليل العلمي الكامل ←' : 'Click to view full scientific analysis →'}
-            </div>
-          </div>
-        `;
-
-        marker.bindPopup(popupContent);
-        marker.addTo(overlayLayersRef.current.hotspots);
-      });
-    }
-
-    // 5. Draw Real Cycle Community Reports
-    if (showReports) {
-      reports.forEach((r) => {
-        // Fallback coordinates based on known Cycle report locations
-        let lat = 30.0444;
-        let lng = 31.2357;
-        const locLower = (r.location || '').toLowerCase();
-        if (locLower.includes('new capital') || locLower.includes('العاصمة')) {
-          lat = 30.0131;
-          lng = 31.7483;
-        } else if (locLower.includes('الزقازيق') || locLower.includes('zagazig')) {
-          lat = 30.5877;
-          lng = 31.502;
-        } else if (locLower.includes('ramadan') || locLower.includes('العاشر')) {
-          lat = 30.306;
-          lng = 31.741;
-        } else if (locLower.includes('alexandria') || locLower.includes('إسكندرية')) {
-          lat = 31.2001;
-          lng = 29.9187;
-        } else if (locLower.includes('monofia') || locLower.includes('منوفية')) {
-          lat = 30.5972;
-          lng = 30.9876;
-        } else {
-          // Slight jitter around central Cairo
-          lat = 30.0444 + ((r.id.charCodeAt(0) % 10) - 5) * 0.015;
-          lng = 31.2357 + ((r.id.charCodeAt(1) % 10) - 5) * 0.015;
-        }
-
-        const reportIcon = L.divIcon({
-          className: 'cycle-report-marker',
-          html: `
-            <div class="w-6 h-6 rounded-full bg-emerald-600 border-2 border-white shadow-md flex items-center justify-center text-white text-[10px] font-extrabold hover:scale-125 transition-transform">
-              ${r.plasticType.substring(0, 2)}
-            </div>
-          `,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
-        });
-
-        const reportMarker = L.marker([lat, lng], { icon: reportIcon });
-        reportMarker.bindPopup(`
-          <div style="font-size:12px;">
-            <strong style="color:#065f46;">Cycle Report: ${r.plasticType}</strong><br/>
-            <span>${r.quantity} ${r.unit}</span> &bull; <em>${r.status}</em><br/>
-            <span style="color:#64748b;">${r.location}</span>
-          </div>
-        `);
-        reportMarker.addTo(overlayLayersRef.current.reports);
-      });
+      compTile.addTo(map);
+      compareGibsRef.current = compTile;
+      setTimeout(applySplitClip, 0);
     }
   }, [
-    studyAreas,
-    hotspots,
-    reports,
-    selectedStudyAreaId,
-    selectedHotspotId,
-    showStudyAreas,
-    showHotspots,
-    showReports,
-    showHeatZones,
-    language,
-    onSelectStudyArea,
-    onSelectHotspot,
+    selectedLayerId,
+    primaryDate,
+    gibsOpacity,
+    showGibsLayer,
+    splitCompareEnabled,
+    compareLayerId,
+    compareDate,
   ]);
 
-  // Center on Selected Study Area
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !selectedStudyAreaId) return;
+    applySplitClip();
+  }, [splitPercent, splitCompareEnabled, showGibsLayer]);
 
-    const area = studyAreas.find((a) => a.id === selectedStudyAreaId);
-    if (area) {
-      map.flyTo(area.center, 10, { duration: 1.2 });
-    }
-  }, [selectedStudyAreaId, studyAreas]);
-
-  // Center on Selected Hotspot
+  // Render Study Regions & Active Point Rectangles
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !selectedHotspotId) return;
+    const group = regionsOverlayRef.current;
+    group.clearLayers();
+    if (!showStudyRegions) return;
 
-    const hotspot = hotspots.find((h) => h.id === selectedHotspotId);
-    if (hotspot) {
-      map.flyTo(hotspot.coordinates, 12, { duration: 1.2 });
+    regions.forEach((r) => {
+      const isSelected = r.id === activeRegion.id;
+      const rect = L.rectangle(r.bounds, {
+        color: isSelected ? '#0891B2' : '#475569',
+        weight: isSelected ? 2.5 : 1.2,
+        fillOpacity: isSelected ? 0.14 : 0.04,
+      });
+      rect.bindTooltip(
+        `${language === 'ar' ? r.nameAr : r.nameEn} (${r.center[0].toFixed(2)}, ${r.center[1].toFixed(2)})`
+      );
+      rect.on('click', () => onSelectRegion(r.id));
+      rect.addTo(group);
+    });
+
+    if (activeRegion.isCustom) {
+      L.circleMarker(activeRegion.center, {
+        radius: 8,
+        color: '#0891B2',
+        weight: 2.5,
+        fillColor: '#06B6D4',
+        fillOpacity: 0.7,
+      })
+        .bindPopup(
+          `<div class="text-xs font-mono"><strong>${activeRegion.nameEn}</strong><br/>${activeRegion.center[0].toFixed(4)}, ${activeRegion.center[1].toFixed(4)}</div>`
+        )
+        .addTo(group);
     }
-  }, [selectedHotspotId, hotspots]);
+  }, [regions, activeRegion, showStudyRegions, language]);
+
+  // Render Live Cycle Ground Plastic Reports & Organizations Overlay (Visually Distinct from NASA layers)
+  useEffect(() => {
+    const group = cycleOverlayRef.current;
+    group.clearLayers();
+    if (!showCycleGroundPins) return;
+
+    reports.forEach((rep, idx) => {
+      const coords = resolveCityCoords(rep.location, idx);
+      if (!coords) return;
+      const isOpen = rep.status === 'Available' || rep.status === 'In discussion';
+      const marker = L.circleMarker(coords, {
+        radius: 5.5,
+        color: '#065F46',
+        weight: 1.5,
+        fillColor: isOpen ? '#10B981' : '#6B7280',
+        fillOpacity: 0.85,
+      });
+      marker.bindPopup(
+        `<div class="text-xs"><strong>Cycle Report (${rep.plasticType})</strong><br/>${rep.quantity} ${rep.unit} · ${rep.location}<br/>Status: ${rep.status}</div>`
+      );
+      marker.addTo(group);
+    });
+
+    organizations.forEach((org, idx) => {
+      const coords = resolveCityCoords(org.location || '', idx + 3);
+      if (!coords) return;
+      const marker = L.circleMarker(coords, {
+        radius: 6,
+        color: '#1E3A8A',
+        weight: 2,
+        fillColor: '#3B82F6',
+        fillOpacity: 0.85,
+      });
+      marker.bindPopup(
+        `<div class="text-xs"><strong>${org.name}</strong><br/>${org.orgType || 'Recycler'} · ${org.location || ''}</div>`
+      );
+      marker.addTo(group);
+    });
+  }, [reports, organizations, showCycleGroundPins]);
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden border border-stone-300 shadow-md bg-stone-900">
-      {/* Map Canvas */}
-      <div ref={mapContainerRef} className="w-full h-[540px] sm:h-[600px] z-0" />
-
-      {/* Top Floating Controls Bar */}
-      <div className="absolute top-3 left-3 right-3 sm:right-auto z-10 flex flex-wrap gap-2">
-        {/* Base Layer Switcher */}
-        <div className="bg-stone-900/90 backdrop-blur-md rounded-xl p-1.5 border border-stone-700/80 shadow-lg flex items-center gap-1 text-xs text-white">
-          <Layers className="w-4 h-4 text-cyan-400 ml-1 mr-1" />
-          <button
-            onClick={() => setActiveBaseLayer('satellite')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              activeBaseLayer === 'satellite'
-                ? 'bg-cyan-600 text-white shadow-xs font-semibold'
-                : 'text-stone-300 hover:text-white hover:bg-stone-800'
-            }`}
-          >
-            {language === 'ar' ? 'قمر صناعي (Esri)' : 'Satellite (Esri)'}
-          </button>
-          <button
-            onClick={() => setActiveBaseLayer('nasa-gibs')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              activeBaseLayer === 'nasa-gibs'
-                ? 'bg-cyan-600 text-white shadow-xs font-semibold'
-                : 'text-stone-300 hover:text-white hover:bg-stone-800'
-            }`}
-          >
-            {language === 'ar' ? 'ناسا موديس (GIBS)' : 'NASA MODIS (GIBS)'}
-          </button>
-          <button
-            onClick={() => setActiveBaseLayer('street')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              activeBaseLayer === 'street'
-                ? 'bg-cyan-600 text-white shadow-xs font-semibold'
-                : 'text-stone-300 hover:text-white hover:bg-stone-800'
-            }`}
-          >
-            {language === 'ar' ? 'خريطة شوارع' : 'Street Map'}
-          </button>
+    <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+      {/* Control Header */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Layers className="w-4 h-4 text-cyan-700" />
+            <h3 className="text-base font-semibold text-slate-900">
+              {language === 'ar'
+                ? 'مستكشف الصور الفضائية التفاعلي (NASA GIBS WMTS) وبيانات سايكل'
+                : 'Interactive NASA GIBS WMTS Explorer & Cycle Ground Network'}
+            </h3>
+            <span className="px-2 py-0.5 text-[11px] font-mono rounded border border-amber-200 bg-amber-50 text-amber-900">
+              VISUAL GIBS IMAGERY ONLY
+            </span>
+          </div>
+          <p className="text-xs text-slate-600">
+            {language === 'ar' ? activeLayer?.visualOnlyNoticeAr : activeLayer?.visualOnlyNoticeEn}
+          </p>
         </div>
 
-        {/* Overlays Toggles */}
-        <div className="bg-stone-900/90 backdrop-blur-md rounded-xl p-1.5 border border-stone-700/80 shadow-lg flex items-center gap-2 text-xs text-stone-300">
-          <label className="flex items-center gap-1.5 cursor-pointer px-1.5 hover:text-white">
-            <input
-              type="checkbox"
-              checked={showHotspots}
-              onChange={(e) => setShowHotspots(e.target.checked)}
-              className="rounded-sm text-cyan-500 focus:ring-0"
-            />
-            <span className="flex items-center gap-1">
-              <Flame className="w-3.5 h-3.5 text-rose-400" />
-              {language === 'ar' ? 'بؤر الخطر' : 'Hotspots'}
-            </span>
-          </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setClickAnalyzeMode((v) => !v)}
+            disabled={analyzingGlobalPoint}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+              clickAnalyzeMode
+                ? 'border-cyan-600 bg-cyan-600 text-white'
+                : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+            {clickAnalyzeMode
+              ? language === 'ar'
+                ? 'انقر أي نقطة على الخريطة...'
+                : 'Click Any Coordinate on Map...'
+              : language === 'ar'
+                ? 'تحليل أي نقطة عالمية بالنقر'
+                : 'Click Map to Analyze Globally'}
+          </button>
 
-          <label className="flex items-center gap-1.5 cursor-pointer px-1.5 hover:text-white">
-            <input
-              type="checkbox"
-              checked={showReports}
-              onChange={(e) => setShowReports(e.target.checked)}
-              className="rounded-sm text-emerald-500 focus:ring-0"
-            />
-            <span className="flex items-center gap-1">
-              <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-              {language === 'ar' ? 'بلاغات سايكل' : 'Cycle Reports'}
-            </span>
-          </label>
-
-          <label className="flex items-center gap-1.5 cursor-pointer px-1.5 hover:text-white">
-            <input
-              type="checkbox"
-              checked={showStudyAreas}
-              onChange={(e) => setShowStudyAreas(e.target.checked)}
-              className="rounded-sm text-cyan-500 focus:ring-0"
-            />
-            <span>{language === 'ar' ? 'نطاقات لاندسات' : 'Landsat Footprints'}</span>
-          </label>
+          <button
+            type="button"
+            onClick={() => setSplitCompareEnabled((v) => !v)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+              splitCompareEnabled
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <SplitSquareHorizontal className="w-3.5 h-3.5" />
+            {language === 'ar' ? 'مقارنة فترتين / طبقتين' : 'Split Compare GIBS'}
+          </button>
         </div>
       </div>
 
-      {/* Legend Badge at Bottom Left */}
-      <div className="absolute bottom-3 left-3 z-10 bg-stone-950/90 backdrop-blur-md border border-stone-800 rounded-xl p-3 text-white text-xs shadow-xl hidden sm:block max-w-xs">
-        <div className="font-semibold text-cyan-400 mb-2 flex items-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>{language === 'ar' ? 'دليل طبقات الرصد الفضائي' : 'Satellite Observation Legend'}</span>
+      {/* GIBS Layer, Date, Opacity & Overlay Controls */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 p-3.5 rounded-lg border border-slate-200 bg-slate-50 text-xs">
+        <div className="md:col-span-4 space-y-1">
+          <label className="block font-semibold text-slate-700">
+            {splitCompareEnabled ? 'Left / Primary NASA GIBS Layer' : 'NASA GIBS WMTS Layer'}
+          </label>
+          <select
+            value={selectedLayerId}
+            onChange={(e) => setSelectedLayerId(e.target.value)}
+            className="w-full px-2.5 py-1.5 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs"
+          >
+            {gibsLayers.map((l) => (
+              <option key={l.id} value={l.id}>
+                {language === 'ar' ? l.titleAr : l.titleEn}
+              </option>
+            ))}
+          </select>
         </div>
-        <div className="space-y-1.5 text-[11px] text-stone-300">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-rose-600 border border-rose-300"></span>
-            <span>{language === 'ar' ? 'أولوية حرجة (Score > 85)' : 'Critical Priority (Score > 85)'}</span>
+
+        <div className="md:col-span-2 space-y-1">
+          <div className="flex items-center justify-between gap-1">
+            <label className="block font-semibold text-slate-700">
+              {splitCompareEnabled ? 'Left Date' : 'GIBS Imagery Date'}
+            </label>
+            {latestObservationDate && (
+              <button
+                type="button"
+                onClick={() => {
+                  setUserPinnedDate(false);
+                  setPrimaryDate(latestObservationDate);
+                }}
+                title={`Snap to latest valid MODIS obs (${latestObservationDate})`}
+                className="text-[10px] font-mono text-cyan-700 hover:underline"
+              >
+                {primaryDate === latestObservationDate ? 'Obs Synced' : 'Sync Obs'}
+              </button>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-amber-600 border border-amber-300"></span>
-            <span>{language === 'ar' ? 'أولوية عالية (Score 75 - 85)' : 'High Priority (Score 75 - 85)'}</span>
+          <input
+            type="date"
+            value={primaryDate}
+            min="2001-01-01"
+            max={todayIso}
+            onChange={(e) => {
+              setUserPinnedDate(true);
+              setPrimaryDate(e.target.value);
+            }}
+            className="w-full px-2.5 py-1.5 rounded border border-slate-300 bg-white font-mono text-xs"
+          />
+          {activeLayer?.cadence === 'annual' && (
+            <p className="text-[10px] font-mono text-amber-800 leading-tight">
+              {language === 'ar'
+                ? `GIBS السنوية متاحة حتى 2024-01-01 (الطبقة المعروضة: ${effectivePrimaryDate}) بينما MCD12Q1 الرقمية حتى 2025.`
+                : `Annual GIBS WMTS tiles are capped at 2024-01-01 (serving ${effectivePrimaryDate}); numeric MCD12Q1 runs through 2025.`}
+            </p>
+          )}
+        </div>
+
+        <div className="md:col-span-2 space-y-1">
+          <label className="block font-semibold text-slate-700 font-mono">
+            Opacity ({Math.round(gibsOpacity * 100)}%)
+          </label>
+          <input
+            type="range"
+            min="0.15"
+            max="1"
+            step="0.05"
+            value={gibsOpacity}
+            onChange={(e) => setGibsOpacity(Number(e.target.value))}
+            className="w-full accent-cyan-700 mt-1"
+          />
+        </div>
+
+        <div className="md:col-span-4 flex flex-wrap items-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowGibsLayer((v) => !v)}
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded border font-mono ${
+              showGibsLayer
+                ? 'border-cyan-300 bg-cyan-50 text-cyan-900'
+                : 'border-slate-300 bg-white text-slate-600'
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5" />
+            GIBS {showGibsLayer ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowStudyRegions((v) => !v)}
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded border font-mono ${
+              showStudyRegions
+                ? 'border-slate-800 bg-slate-800 text-white'
+                : 'border-slate-300 bg-white text-slate-600'
+            }`}
+          >
+            AOIs {showStudyRegions ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowCycleGroundPins((v) => !v)}
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded border font-mono ${
+              showCycleGroundPins
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                : 'border-slate-300 bg-white text-slate-600'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            Cycle Pins ({reports.length})
+          </button>
+        </div>
+
+        {/* Comparison Right Pane Controls */}
+        {splitCompareEnabled && (
+          <div className="md:col-span-12 pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-5 space-y-1">
+              <label className="block font-semibold text-slate-700">
+                Right Comparison NASA GIBS Layer
+              </label>
+              <select
+                value={compareLayerId}
+                onChange={(e) => setCompareLayerId(e.target.value)}
+                className="w-full px-2.5 py-1.5 rounded border border-slate-300 bg-white font-mono text-xs"
+              >
+                {gibsLayers.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {language === 'ar' ? l.titleAr : l.titleEn}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-3 space-y-1">
+              <label className="block font-semibold text-slate-700">Right Comparison Date</label>
+              <input
+                type="date"
+                value={compareDate}
+                min="2001-01-01"
+                max={todayIso}
+                onChange={(e) => setCompareDate(e.target.value)}
+                className="w-full px-2.5 py-1.5 rounded border border-slate-300 bg-white font-mono text-xs"
+              />
+            </div>
+            <div className="md:col-span-4 space-y-1">
+              <label className="block font-semibold text-slate-700 font-mono">
+                Split Divider Position ({splitPercent}%)
+              </label>
+              <input
+                type="range"
+                min="10"
+                max="90"
+                step="1"
+                value={splitPercent}
+                onChange={(e) => setSplitPercent(Number(e.target.value))}
+                className="w-full accent-slate-900"
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-emerald-600 border border-white"></span>
-            <span>{language === 'ar' ? 'بلاغات مخلفات بلاستيكية مجتمعية' : 'Cycle Community Waste Report'}</span>
+        )}
+      </div>
+
+      {/* Leaflet Canvas */}
+      <div className="relative rounded-xl overflow-hidden border border-slate-200">
+        <div
+          ref={mapElRef}
+          className={`w-full h-[460px] z-0 ${clickAnalyzeMode ? 'cursor-crosshair' : ''}`}
+        />
+
+        {splitCompareEnabled && showGibsLayer && (
+          <div className="pointer-events-none absolute top-3 left-3 right-3 flex justify-between z-[400] text-[11px] font-mono">
+            <span className="px-2.5 py-1 rounded border border-slate-300 bg-white/95 text-slate-900">
+              LEFT: {activeLayer?.layerIdentifier} · {primaryDate}
+            </span>
+            <span className="px-2.5 py-1 rounded border border-slate-300 bg-white/95 text-slate-900">
+              RIGHT: {compareLayer?.layerIdentifier} · {compareDate}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-xs border-2 border-dashed border-cyan-400 bg-cyan-500/20"></span>
-            <span>{language === 'ar' ? 'بصمة قمر لاندسات 8/9 (30 متراً)' : 'Landsat 8/9 Scene Footprint (30m)'}</span>
-          </div>
+        )}
+      </div>
+
+      {/* Dynamic Legend & Ground Separation Legend */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          {activeLayer?.legendStops?.map((stop, idx) => (
+            <span
+              key={idx}
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-slate-200 bg-slate-50 text-[11px] font-mono text-slate-700"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10">
+                <rect width="10" height="10" rx="2" fill={stop.color} />
+              </svg>
+              {language === 'ar' ? stop.labelAr : stop.labelEn}
+            </span>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-600">
+          <span className="inline-flex items-center gap-1">
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <circle cx="5" cy="5" r="4" fill="#10B981" stroke="#065F46" strokeWidth="1" />
+            </svg>
+            Cycle Open Reports
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <circle cx="5" cy="5" r="4" fill="#3B82F6" stroke="#1E3A8A" strokeWidth="1" />
+            </svg>
+            Registered Recyclers
+          </span>
+          <span className="inline-flex items-center gap-1 text-slate-500">
+            <Info className="w-3.5 h-3.5" />
+            Max native zoom: L{activeLayer?.maxZoom ?? 9}
+          </span>
         </div>
       </div>
     </div>

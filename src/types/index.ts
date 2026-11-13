@@ -280,116 +280,410 @@ export interface AppSettings {
 }
 
 // -------------------------------------------------------------
-// NASA EARTH INTELLIGENCE & SATELLITE OBSERVATION TYPES
+// NASA EARTH INTELLIGENCE ENGINE TYPES (REAL NASA V061 + GIBS + APPEEARS)
 // -------------------------------------------------------------
 
-export interface NASAStudyArea {
+export type EpistemicTier =
+  | 'raw_satellite'
+  | 'processed_measurement'
+  | 'calculated_indicator'
+  | 'analytical_interpretation'
+  | 'suggested_action';
+
+export type DataRetrievalStatus =
+  | 'verified'
+  | 'pending'
+  | 'insufficient_data'
+  | 'requires_configuration'
+  | 'error';
+
+export interface NASADatasetCatalogEntry {
+  id: 'MOD13Q1.061' | 'MCD12Q1.061' | 'MOD11A2.061' | 'NASA_GIBS' | 'APPEEARS';
+  shortName: string;
+  titleEn: string;
+  titleAr: string;
+  provider: string;
+  doi?: string;
+  officialUrl: string;
+  spatialResolution: string;
+  temporalFrequency: string;
+  temporalCoverage: string;
+  queriedTemporalCoverage?: string;
+  bandsUsed: string[];
+  scaleFactorNote: string;
+  fillValueNote: string;
+  qaMethod: string;
+  limitationsEn: string;
+  limitationsAr: string;
+  isVisualOnly?: boolean;
+}
+
+export interface StudyRegionDefinition {
   id: string;
   nameEn: string;
   nameAr: string;
   governorateEn: string;
   governorateAr: string;
+  countryCode: string;
+  isEgyptCaseStudy: boolean;
+  isCustom?: boolean;
   center: [number, number]; // [lat, lng]
   bounds: [[number, number], [number, number]];
-  wrsPathRow: string; // e.g. 176/039
-  modisTile: string; // e.g. h20v05
   descriptionEn: string;
   descriptionAr: string;
-  environmentalProfileEn: string;
-  environmentalProfileAr: string;
-  cycleReportIds: string[];
-  associatedOrgIds: string[];
+  resolutionCaveatEn: string;
+  resolutionCaveatAr: string;
+  keywords: string[]; // For spatial matching to Cycle reports/organizations
 }
 
-export interface LandsatSurfaceBands {
-  sr_b2_blue: number; // Band 2 (0.452 - 0.512 µm)
-  sr_b3_green: number; // Band 3 (0.533 - 0.590 µm)
-  sr_b4_red: number; // Band 4 (0.636 - 0.673 µm)
-  sr_b5_nir: number; // Band 5 (0.851 - 0.879 µm)
-  sr_b6_swir1: number; // Band 6 (1.566 - 1.651 µm)
-  sr_b7_swir2: number; // Band 7 (2.107 - 2.294 µm)
-  st_b10_thermal: number; // Band 10 Surface Temperature (Kelvin)
-}
-
-export interface LandsatObservation {
+export interface GIBSLayerConfig {
   id: string;
-  studyAreaId: string;
-  sensor: 'Landsat 8 OLI/TIRS' | 'Landsat 9 OLI-2/TIRS-2';
-  product: 'LANDSAT/LC08/C02/T1_L2' | 'LANDSAT/LC09/C02/T1_L2';
-  acquisitionDate: string;
-  wrsPathRow: string;
-  cloudCoverPercent: number;
-  sunElevation: number;
-  surfaceReflectance: LandsatSurfaceBands;
-  ndvi: number; // (NIR - Red) / (NIR + Red)
-  ndbi: number; // (SWIR1 - NIR) / (SWIR1 + NIR)
-  ndwi: number; // (Green - NIR) / (Green + NIR)
-  qaPixelValid: boolean;
-  qualitySummaryEn: string;
-  qualitySummaryAr: string;
+  layerIdentifier: string;
+  titleEn: string;
+  titleAr: string;
+  category: 'true_color' | 'vegetation' | 'temperature' | 'land_cover';
+  linkedProductId: string;
+  tileMatrixSet: string;
+  format: 'jpg' | 'png';
+  maxZoom: number;
+  defaultDate: string;
+  cadence: 'daily' | '8day' | '16day' | 'annual';
+  legendStops?: Array<{ color: string; labelEn: string; labelAr: string }>;
+  visualOnlyNoticeEn: string;
+  visualOnlyNoticeAr: string;
 }
 
-export interface ModisVegetationRecord {
-  date: string;
+export interface ModisVegetationObservation {
+  modisDate: string;
+  date: string; // YYYY-MM-DD
   dayOfYear: number;
-  ndvi: number; // Normalized Difference Vegetation Index (scale 0.0001)
-  evi: number; // Enhanced Vegetation Index (scale 0.0001)
-  summaryQA: number; // 0 = Good, 1 = Marginal, 2 = Snow/Ice, 3 = Cloudy
-  qualityLabel: 'Good' | 'Marginal' | 'Cloudy';
+  ndvi: number | null; // Scaled by 0.0001
+  evi: number | null; // Scaled by 0.0001
+  ndviStdDev: number | null;
+  eviStdDev: number | null;
+  validPixels: number;
+  totalPixels: number;
+  pixelReliabilityMode: number | null; // 0=Good, 1=Marginal, 2=Snow/Ice, 3=Cloudy
+  qualityLabel: 'Good' | 'Marginal' | 'Snow/Ice' | 'Cloudy' | 'NoData';
+  strictNdvi?: number | null;
+  strictEvi?: number | null;
+  strictNdviStdDev?: number | null;
+  strictEviStdDev?: number | null;
+  strictValidPixels?: number;
+  goodPixels?: number;
+  marginalPixels?: number;
+  cloudyPixels?: number;
+  viQualityDecoded?: boolean;
+  qaPassed?: boolean;
+  tile: string;
 }
 
-export interface EnvironmentalHotspot {
-  id: string;
+export interface ModisLandCoverClassShare {
+  classId: number;
   nameEn: string;
   nameAr: string;
-  studyAreaId: string;
-  coordinates: [number, number]; // [lat, lng]
-  wasteVolumeKg: number;
-  reportsCount: number;
-  dominantPlastics: PlasticType[];
-  landsatNDBI: number; // Built-up surface index
-  landsatNDVI: number; // Current vegetation index
-  vegetationChange5Yr: number; // % change 2020-2024
-  nearestOrgDistanceKm: number;
-  nearestOrgName: string;
-  collectionPriorityScore: number; // 0 to 100
-  priorityLevel: 'Critical' | 'High' | 'Medium' | 'Low';
-  scoreBreakdown: {
-    wasteVolumeComponent: number; // 35% weight
-    urbanPressureComponent: number; // 25% weight
-    logisticalGapComponent: number; // 25% weight
-    ecologicalVulnerabilityComponent: number; // 15% weight
-  };
-  scientificRationaleEn: string;
-  scientificRationaleAr: string;
+  color: string;
+  pixelCount: number;
+  percent: number;
 }
 
-export interface EarthIntelligencePayload {
-  studyAreas: NASAStudyArea[];
-  hotspots: EnvironmentalHotspot[];
-  historicalBenchmarks: Record<
-    string,
-    {
-      baseline2020: LandsatObservation;
-      current2024: LandsatObservation;
-      deltaNDVI: number;
-      deltaNDBI: number;
-      urbanExpansionPercent: number;
-    }
-  >;
-  modisTimeSeries: Record<string, ModisVegetationRecord[]>;
-  summary: {
-    totalWasteMonitoredKg: number;
-    activeHotspotsCount: number;
-    highPriorityHotspotsCount: number;
-    totalSatelliteAreaSqKm: number;
-    lastSatellitePass: string;
+export interface ModisLandCoverYearRecord {
+  modisDate: string;
+  year: number;
+  date: string;
+  totalPixels: number;
+  validPixels: number;
+  qcValidPixels?: number;
+  qcProcessed?: boolean;
+  meanAssessmentPercent: number | null;
+  dominantClassId: number | null;
+  dominantClassNameEn: string;
+  dominantClassNameAr: string;
+  classes: ModisLandCoverClassShare[];
+  tile: string;
+}
+
+export interface LandCoverTransitionEntry {
+  fromClassId: number;
+  fromNameEn: string;
+  fromNameAr: string;
+  toClassId: number;
+  toNameEn: string;
+  toNameAr: string;
+  pixelCount: number;
+  percentOfAnalyzedGrid: number;
+  isChanged: boolean;
+}
+
+export interface ModisLstObservation {
+  modisDate: string;
+  date: string; // YYYY-MM-DD
+  dayOfYear: number;
+  lstDayCelsius: number | null;
+  lstNightCelsius: number | null;
+  diurnalRangeCelsius: number | null;
+  lstDayKelvin: number | null;
+  lstNightKelvin: number | null;
+  dayValidPixels: number;
+  nightValidPixels: number;
+  totalPixels: number;
+  qcDayFlag: number | null; // 0=Good, 1=Other, 2/3=Cloud/NotProduced
+  qcNightFlag: number | null;
+  dayQualityLabel: 'Good' | 'OtherQuality' | 'Cloud/Invalid' | 'NoData';
+  nightQualityLabel: 'Good' | 'OtherQuality' | 'Cloud/Invalid' | 'NoData';
+  strictLstDayCelsius?: number | null;
+  strictLstNightCelsius?: number | null;
+  strictDayValidPixels?: number;
+  strictNightValidPixels?: number;
+  dayGoodPixels?: number;
+  dayOtherQualityPixels?: number;
+  nightGoodPixels?: number;
+  nightOtherQualityPixels?: number;
+  dayLstErrorMaxK?: number | null;
+  nightLstErrorMaxK?: number | null;
+  clearSkyDayCountMean?: number | null;
+  clearSkyNightCountMean?: number | null;
+  qaPassedDay?: boolean;
+  qaPassedNight?: boolean;
+  tile: string;
+}
+
+export interface MannKendallTrendResult {
+  status: 'computed' | 'insufficient_data';
+  metricName: string;
+  unit: string;
+  sampleCount: number;
+  rawSampleCount?: number;
+  seasonalCellCount?: number;
+  distinctYears?: number;
+  spanYears?: number;
+  dateSpanStart?: string;
+  dateSpanEnd?: string;
+  sStatistic: number | null;
+  zScore: number | null;
+  pValue: number | null;
+  significanceSupported: boolean;
+  sensSlopePerYear: number | null;
+  sensSlopeCiLow?: number | null;
+  sensSlopeCiHigh?: number | null;
+  ciLevel?: number;
+  sensSlopePerDecade: number | null;
+  shortRecordLimitationEn?: string | null;
+  shortRecordLimitationAr?: string | null;
+  direction:
+    | 'increasing'
+    | 'decreasing'
+    | 'no_significant_trend'
+    | 'inconclusive_short_record'
+    | 'insufficient_data';
+  alpha: number;
+  methodUsed:
+    | 'Monthly-Aggregated Seasonal Mann-Kendall (Hirsch-Slack 1984) + Sen Slope'
+    | 'Seasonal Mann-Kendall + Sen Slope'
+    | 'Mann-Kendall + Sen Slope';
+  interpretationEn: string;
+  interpretationAr: string;
+}
+
+export interface BaselineAnomalyResult {
+  status: 'computed' | 'insufficient_data';
+  metricName: string;
+  unit: string;
+  baselinePeriodLabel: string;
+  comparisonPeriodLabel: string;
+  baselineMean: number | null;
+  baselineStdDev: number | null;
+  comparisonMean: number | null;
+  absoluteDelta: number | null;
+  percentChange: number | null;
+  zScore: number | null;
+  baselineSampleCount: number;
+  comparisonSampleCount: number;
+}
+
+export interface EarthChangeStory {
+  id: string;
+  regionId: string;
+  regionNameEn: string;
+  regionNameAr: string;
+  status: 'verified' | 'insufficient_data';
+  titleEn: string;
+  titleAr: string;
+  summaryEn: string;
+  summaryAr: string;
+  evidenceItems: Array<{
+    tier: EpistemicTier;
+    datasetId: string;
+    metricLabelEn: string;
+    metricLabelAr: string;
+    valueFormatted: string;
+    dateRange: string;
+  }>;
+  uncertaintyNoteEn: string;
+  uncertaintyNoteAr: string;
+}
+
+export interface ActionInsightMatch {
+  regionId: string;
+  regionNameEn: string;
+  regionNameAr: string;
+  center: [number, number];
+  environmentalContextStatus: DataRetrievalStatus;
+  environmentalIndicators: {
+    latestNdvi: number | null;
+    ndviTrendDirection: MannKendallTrendResult['direction'];
+    latestDayLstCelsius: number | null;
+    lstAnomalyCelsius: number | null;
+    dominantLandCoverEn: string | null;
+    dominantLandCoverAr: string | null;
+    builtUpPercent: number | null;
   };
-  attribution: {
-    landsatSource: string;
-    modisSource: string;
-    gibsTileUrl: string;
-    disclaimerEn: string;
-    disclaimerAr: string;
+  cycleGroundData: {
+    matchedReportsCount: number;
+    availableReportsCount: number;
+    totalReportedWeightKg: number;
+    dominantPolymers: PlasticType[];
+    matchedReportIds: string[];
+    nearbyOrganizationsCount: number;
+    nearbyOrganizations: Array<{ id: string; name: string; orgType: string; location: string }>;
+  };
+  compositePriorityScore: number | null; // Explicit experimental heuristic (clearly labeled)
+  priorityLevel: 'High' | 'Medium' | 'Low' | 'Unranked';
+  formulaDisclosureEn: string;
+  formulaDisclosureAr: string;
+  recommendedActionsEn: string[];
+  recommendedActionsAr: string[];
+}
+
+export interface RegionAnalysisPayload {
+  region: StudyRegionDefinition;
+  retrievalStatus: DataRetrievalStatus;
+  retrievedAt: string;
+  fromCache: boolean;
+  errors: Array<{ product: string; message: string }>;
+  qaFilterMode: 'strict_good' | 'good_and_marginal';
+  vegetation: {
+    status: DataRetrievalStatus;
+    productId: 'MOD13Q1.061';
+    tile: string | null;
+    gridRows: number;
+    gridCols: number;
+    cellSizeMeters: number;
+    totalObservations: number;
+    validObservations: number;
+    excludedObservations: number;
+    qaCoveragePercent: number;
+    observations: ModisVegetationObservation[];
+    ndviTrend: MannKendallTrendResult;
+    eviTrend: MannKendallTrendResult;
+    ndviAnomaly: BaselineAnomalyResult;
+  };
+  landCover: {
+    status: DataRetrievalStatus;
+    productId: 'MCD12Q1.061';
+    tile: string | null;
+    gridRows: number;
+    gridCols: number;
+    cellSizeMeters: number;
+    classificationScheme: string;
+    years: ModisLandCoverYearRecord[];
+    baselineYear: number | null;
+    latestYear: number | null;
+    transitions: LandCoverTransitionEntry[];
+    unchangedPercent: number | null;
+    changedPercent: number | null;
+    caveatEn: string;
+    caveatAr: string;
+  };
+  temperature: {
+    status: DataRetrievalStatus;
+    productId: 'MOD11A2.061';
+    tile: string | null;
+    gridRows: number;
+    gridCols: number;
+    cellSizeMeters: number;
+    totalObservations: number;
+    validDayObservations: number;
+    validNightObservations: number;
+    excludedDayObservations: number;
+    observations: ModisLstObservation[];
+    dayLstTrend: MannKendallTrendResult;
+    nightLstTrend: MannKendallTrendResult;
+    dayLstAnomaly: BaselineAnomalyResult;
+    surfaceVsAirNoteEn: string;
+    surfaceVsAirNoteAr: string;
+  };
+  story: EarthChangeStory;
+  provenance: {
+    apiProvider: string;
+    modisGridSampleCount: string;
+    transformationsApplied: string[];
+    epistemicBoundaries: Array<{
+      tier: EpistemicTier;
+      labelEn: string;
+      labelAr: string;
+      descriptionEn: string;
+      descriptionAr: string;
+    }>;
   };
 }
+
+export interface EarthIntelligenceOverviewResponse {
+  regions: StudyRegionDefinition[];
+  datasetCatalog: NASADatasetCatalogEntry[];
+  gibsLayers: GIBSLayerConfig[];
+  appeearsStatus: {
+    configured: boolean;
+    authMode: 'bearer_token' | 'username_password' | 'unconfigured';
+    endpoint: string;
+    supportedProducts: string[];
+    supportedFormats: Array<'geotiff' | 'netcdf4'>;
+  };
+  initialRegionAnalysis: RegionAnalysisPayload;
+}
+
+export interface AppEEARSRasterFileSummary {
+  fileName: string;
+  format: 'geotiff' | 'netcdf4' | 'netcdf3' | 'other';
+  sizeBytes: number;
+  crs: string | null;
+  bbox: [number, number, number, number] | null;
+  dimensions: { width: number; height: number; bandsOrVariables: number } | null;
+  noDataValue: number | string | null;
+  scaleFactorApplied: number | null;
+  addOffsetApplied: number | null;
+  units: string | null;
+  variables: Array<{
+    name: string;
+    shape: number[];
+    units: string | null;
+    fillValue: number | null;
+    validCount: number;
+    excludedFillCount: number;
+    min: number | null;
+    max: number | null;
+    mean: number | null;
+    stdDev: number | null;
+  }>;
+  warnings: string[];
+}
+
+export interface AppEEARSTaskRecord {
+  taskId: string;
+  taskName: string;
+  status: 'pending' | 'queued' | 'processing' | 'done' | 'error' | 'requires_configuration';
+  taskType: 'area' | 'point';
+  products: Array<{ product: string; layer: string }>;
+  startDate: string;
+  endDate: string;
+  outputFormat: 'geotiff' | 'netcdf4';
+  bbox?: [number, number, number, number];
+  point?: { latitude: number; longitude: number };
+  createdAt: string;
+  updatedAt: string;
+  progressPercent?: number;
+  errorMessage?: string;
+  bundleFiles?: Array<{ file_id: string; file_name: string; file_size: number; file_type: string }>;
+  processedSummaries?: AppEEARSRasterFileSummary[];
+}
+
